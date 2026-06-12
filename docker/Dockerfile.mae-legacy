@@ -1,0 +1,38 @@
+FROM continuumio/miniconda3:4.12.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV MUJOCO_PY_MJPRO_PATH=/root/.mujoco/mjpro150
+ENV LD_LIBRARY_PATH=/root/.mujoco/mjpro150/bin
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    libgl1-mesa-dev \
+    libgl1-mesa-glx \
+    libglew-dev \
+    libosmesa6-dev \
+    libxrender1 \
+    libxrandr2 \
+    libxinerama1 \
+    libxcursor1 \
+    patchelf \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /root/.mujoco \
+    && curl -L -o /tmp/mjpro150_linux.zip https://www.roboti.us/download/mjpro150_linux.zip \
+    && curl -L -o /root/.mujoco/mjkey.txt https://www.roboti.us/file/mjkey.txt \
+    && unzip /tmp/mjpro150_linux.zip -d /root/.mujoco \
+    && rm /tmp/mjpro150_linux.zip
+
+WORKDIR /workspace
+
+COPY environment.yml /workspace/environment.yml
+COPY mujoco-worldgen /workspace/mujoco-worldgen
+COPY multi-agent-emergence-environments /workspace/multi-agent-emergence-environments
+
+RUN conda env create -f /workspace/environment.yml
+RUN conda run -n mae-legacy python -m pip install "pip<21" "setuptools<60" wheel
+
+CMD ["conda", "run", "--no-capture-output", "-n", "mae-legacy", "python", "/workspace/multi-agent-emergence-environments/bin/examine.py", "/workspace/multi-agent-emergence-environments/examples/hide_and_seek_quadrant.jsonnet"]

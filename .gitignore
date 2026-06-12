@@ -1,0 +1,20 @@
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Local experiment outputs
+runs/
+wandb/
+checkpoints/
+videos/
+logs/
+
+# Large upstream artifacts and local MuJoCo assets should stay out of git.
+*.mjkey
+*.npz
+*.pkl
+*.pickle
+
