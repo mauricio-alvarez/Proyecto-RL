@@ -1,28 +1,33 @@
-# Proyecto RL: Multi-Agent Hide-and-Seek Baseline
+# Proyecto RL: Linux Reproduction Guide
 
-This workspace sets up the legacy OpenAI multi-agent emergence environments as a reproducible baseline for a seeker/hider reinforcement learning project.
+This repository contains a reproducible Docker setup for the legacy OpenAI multi-agent emergence environments. It is intended as the baseline for a seeker/hider reinforcement learning project.
 
-The immediate goal is to reproduce the original hide-and-seek environment, collect rollout data, and use that as the base for later training and transfer experiments, including cybersecurity-inspired seeker/hider environments.
+The validated baseline is:
 
-## Current Status
+- Environment: `hide_and_seek_quadrant.jsonnet`
+- Runtime: Docker image `mae-legacy:dev`
+- Python: 3.6 inside Conda
+- MuJoCo: 1.50
+- Main validation: headless reset, stepping, and random rollout collection
 
-Implemented and validated:
+## What Is Already Implemented
 
-- Cloned `openai/multi-agent-emergence-environments`.
-- Cloned required dependency `openai/mujoco-worldgen`.
-- Created a legacy Docker image named `mae-legacy:dev`.
-- Installed Python 3.6, MuJoCo 1.50, `mujoco-py`, Gym 0.10.8, SciPy 1.3.1, and related dependencies inside Docker.
-- Fixed the original `jsonnet==0.11.2` pin by using `jsonnet==0.17.0`, because 0.11.2 failed inside the container.
-- Added a headless smoke test.
-- Added a rollout collector.
-- Collected 10 random-policy episodes from `hide_and_seek_quadrant.jsonnet`.
+Implemented:
 
-Not implemented yet:
+- Legacy Docker image definition in `docker/Dockerfile.mae-legacy`.
+- Conda dependency file in `environment.yml`.
+- Headless smoke test in `scripts/smoke_mae.py`.
+- Rollout collector in `scripts/collect_rollouts.py`.
+- OpenGL diagnostic script in `scripts/check_gl.py`.
+- Methodology and validation notes in `docs/`.
+- A sample random rollout artifact in `runs/random_rollouts_hide_seek_quadrant.npz`.
+
+Not implemented:
 
 - RL training loop.
 - Saved-policy playback dependencies from `requirements_ma_policy.txt`.
-- Verified GUI visualization from Docker on Windows.
 - Cybersecurity transfer environment.
+- Production-quality trajectory visualization.
 
 ## Repository Layout
 
@@ -39,56 +44,110 @@ Not implemented yet:
 |-- runs/
 |   `-- random_rollouts_hide_seek_quadrant.npz
 |-- scripts/
+|   |-- check_gl.py
 |   |-- collect_rollouts.py
 |   `-- smoke_mae.py
+|-- ASIS.md
 |-- environment.yml
 `-- README.md
 ```
 
-## Prerequisites
+## Linux Prerequisites
 
-Required:
+Install these on the Linux host:
 
-- Windows with Docker Desktop running.
-- Docker Desktop configured for Linux containers.
-- This project located at:
+- `git`
+- Docker Engine or Docker Desktop for Linux
+- Optional for live GUI visualization: working X11 or XWayland session
 
-```text
-C:\Users\asus\Documents\Proyecto RL
+On Ubuntu/Debian, a minimal Docker setup is:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc >/dev/null
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-The native Windows Python environment is not used for the working environment. The upstream project is too old for Python 3.12, so the runnable path is Docker.
+Optional: allow your user to run Docker without `sudo`.
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker
+```
+
+Verify Docker:
+
+```bash
+docker version
+docker run --rm hello-world
+```
+
+If your environment requires `sudo docker`, use `sudo docker` in the commands below.
+
+## Prepare The Workspace
+
+Clone this project repository:
+
+```bash
+git clone <PROJECT_REPO_URL> proyecto-rl
+cd proyecto-rl
+```
+
+If the two upstream source directories are not already present, clone them:
+
+```bash
+git clone https://github.com/openai/mujoco-worldgen.git
+git clone https://github.com/openai/multi-agent-emergence-environments.git
+```
+
+The Docker build expects both directories to exist at the repository root:
+
+```text
+./mujoco-worldgen
+./multi-agent-emergence-environments
+```
 
 ## Build The Docker Image
 
-From PowerShell, inside the project directory:
+From the repository root:
 
-```powershell
-cd "C:\Users\asus\Documents\Proyecto RL"
+```bash
 docker build -f docker/Dockerfile.mae-legacy -t mae-legacy:dev .
 ```
 
-Expected result:
+Expected final build evidence:
 
 ```text
 naming to docker.io/library/mae-legacy:dev
 ```
 
-The Dockerfile downloads:
+The image build installs:
 
-- MuJoCo 1.50 into `/root/.mujoco/mjpro150`
-- The public legacy MuJoCo key into `/root/.mujoco/mjkey.txt`
-- Python dependencies into Conda environment `mae-legacy`
+- Python 3.6 through Conda
+- MuJoCo 1.50 at `/root/.mujoco/mjpro150`
+- Public legacy MuJoCo key at `/root/.mujoco/mjkey.txt`
+- `mujoco-py>=1.50.1,<1.50.2`
+- `gym==0.10.8`
+- `scipy==1.3.1`
+- `jsonnet==0.17.0`
+- Editable installs of `mujoco-worldgen` and `multi-agent-emergence-environments`
 
-## Run The Smoke Test
+## Run A Headless Smoke Test
 
-This verifies that MuJoCo, JSONNet, and the hide-and-seek environment work.
+This verifies that the container can import MuJoCo, load the JSONNet environment, reset it, and step it.
 
-```powershell
-docker run --rm -v "C:\Users\asus\Documents\Proyecto RL:/workspace" mae-legacy:dev conda run --no-capture-output -n mae-legacy python /workspace/scripts/smoke_mae.py --episodes 3 --steps 20
+```bash
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/smoke_mae.py --episodes 3 --steps 20
 ```
 
-Expected evidence:
+Expected output shape:
 
 ```text
 action_space: Dict(...)
@@ -98,17 +157,24 @@ episode=1 steps=20 total_reward=[...] done=False discard=False
 episode=2 steps=20 total_reward=[...] done=False discard=False
 ```
 
-The `discard=False` value is important. It means the episode did not hit a MuJoCo simulation failure.
+`discard=False` means MuJoCo did not throw a simulation error.
 
 ## Collect Random Rollouts
 
-This collects observations, actions, rewards, done flags, and info dictionaries.
+This saves observations, actions, rewards, done flags, and info dictionaries into a compressed `.npz`.
 
-```powershell
-docker run --rm -v "C:\Users\asus\Documents\Proyecto RL:/workspace" mae-legacy:dev conda run --no-capture-output -n mae-legacy python /workspace/scripts/collect_rollouts.py --episodes 10 --steps 120 --seed 7 --out /workspace/runs/random_rollouts_hide_seek_quadrant.npz
+```bash
+mkdir -p runs
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/collect_rollouts.py \
+    --episodes 10 \
+    --steps 120 \
+    --seed 7 \
+    --out /workspace/runs/random_rollouts_hide_seek_quadrant.npz
 ```
 
-Validated result:
+Validated result from the current workspace:
 
 ```text
 episodes_collected: 10
@@ -116,21 +182,21 @@ discard_count: 0
 saved: /workspace/runs/random_rollouts_hide_seek_quadrant.npz
 ```
 
-The saved file appears on Windows at:
+The output file on the Linux host is:
 
 ```text
-C:\Users\asus\Documents\Proyecto RL\runs\random_rollouts_hide_seek_quadrant.npz
+./runs/random_rollouts_hide_seek_quadrant.npz
 ```
 
 ## Inspect The Saved Dataset
 
-Use Docker to inspect the `.npz` file:
-
-```powershell
-docker run --rm -v "C:\Users\asus\Documents\Proyecto RL:/workspace" mae-legacy:dev conda run --no-capture-output -n mae-legacy python -c "import numpy as np; data=np.load('/workspace/runs/random_rollouts_hide_seek_quadrant.npz', allow_pickle=True); print('npz_keys', sorted(data.files)); print('episodes', len(data['episodes'])); print('summaries', len(data['summaries'])); print('first_summary', data['summaries'][0])"
+```bash
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python -c "import numpy as np; data=np.load('/workspace/runs/random_rollouts_hide_seek_quadrant.npz', allow_pickle=True); print('npz_keys', sorted(data.files)); print('episodes', len(data['episodes'])); print('summaries', len(data['summaries'])); print('first_summary', data['summaries'][0])"
 ```
 
-Validated output:
+Validated output from the current workspace:
 
 ```text
 npz_keys ['episodes', 'manifest', 'summaries']
@@ -139,110 +205,113 @@ summaries 10
 first_summary {'episode': 0, 'steps': 80, 'total_reward': [-36.0, -36.0, 36.0, 36.0], 'done': True, 'discard_episode': False, ...}
 ```
 
-## Run The Original Examine Script
+## Run The Original Viewer On Linux
 
-The original repo provides `bin/examine.py`.
+The original interactive viewer is `multi-agent-emergence-environments/bin/examine.py`.
 
-Headless environment loading is already validated through the smoke and rollout scripts. The direct examine command is:
+First, verify that the container sees a valid OpenGL context:
 
-```powershell
-docker run --rm -v "C:\Users\asus\Documents\Proyecto RL:/workspace" mae-legacy:dev conda run --no-capture-output -n mae-legacy python /workspace/multi-agent-emergence-environments/bin/examine.py /workspace/multi-agent-emergence-environments/examples/hide_and_seek_quadrant.jsonnet
+```bash
+xhost +local:docker
+docker run --rm \
+  -e DISPLAY="$DISPLAY" \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v "$PWD:/workspace" \
+  mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/check_gl.py
 ```
 
-This command may attempt to open an interactive viewer. On Windows Docker Desktop, GUI output from Linux containers requires extra display setup.
-
-## Visualization Options
-
-### Option A: Windows X Server
-
-Install and start an X server such as VcXsrv or X410 on Windows.
-
-For VcXsrv, typical settings:
-
-- Multiple windows
-- Display number: `0`
-- Start no client
-- Disable access control for local development
+The viewer requires OpenGL `1.5` or higher.
 
 Then run:
 
-```powershell
-docker run --rm -e DISPLAY=host.docker.internal:0.0 -v "C:\Users\asus\Documents\Proyecto RL:/workspace" mae-legacy:dev conda run --no-capture-output -n mae-legacy python /workspace/multi-agent-emergence-environments/bin/examine.py /workspace/multi-agent-emergence-environments/examples/hide_and_seek_quadrant.jsonnet
+```bash
+docker run --rm \
+  -e DISPLAY="$DISPLAY" \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v "$PWD:/workspace" \
+  mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/multi-agent-emergence-environments/bin/examine.py \
+    /workspace/multi-agent-emergence-environments/examples/hide_and_seek_quadrant.jsonnet
 ```
 
-This path is not yet verified in this workspace. It is the standard direction for GUI forwarding from a Linux Docker container to Windows.
+After testing, revoke the broad local X11 permission:
 
-Diagnostic command:
-
-```powershell
-docker run --rm -e DISPLAY=host.docker.internal:0.0 -v "C:\Users\asus\Documents\Proyecto RL:/workspace" mae-legacy:dev conda run --no-capture-output -n mae-legacy python /workspace/scripts/check_gl.py
+```bash
+xhost -local:docker
 ```
 
-The viewer needs an OpenGL context whose version is at least `1.5`.
-
-Previously observed failing VcXsrv result:
+If the viewer opens but appears static, check the current action overlay. The default action is neutral:
 
 ```text
-DISPLAY: host.docker.internal:0.0
-window_created: True
-GL_VENDOR: NVIDIA Corporation
-GL_RENDERER: NVIDIA GeForce RTX 3060 Ti/PCIe/SSE2
-GL_VERSION: 1.4 (4.6.0 NVIDIA 591.86)
+action_movement = [5, 5, 5]
 ```
 
-That fails because MuJoCo reads the context as OpenGL `1.4`.
+For `MultiDiscrete([11, 11, 11])`, value `5` is the no-op center value. Use the viewer controls to change actions:
 
-If this happens, restart VcXsrv and toggle the **Native opengl** option:
+- `Y / U`: select agent
+- `G / B`: select action type
+- `J / K`: select action dimension
+- `A / Z`: decrease/increase selected action
+- `N`: reset to next seed
+- `Space`: stop/start
+- `Right arrow`: step once
 
-- If it was enabled, disable it and rerun `scripts/check_gl.py`.
-- If it was disabled, enable it and rerun `scripts/check_gl.py`.
+## Common Issues
 
-If `GL_VERSION` still starts with `1.4`, VcXsrv is not a viable live-viewer path for this container.
+### Docker Permission Denied
 
-Observed working VcXsrv result:
+If Docker reports permission denied:
 
-```text
-DISPLAY: host.docker.internal:0.0
-window_created: True
-GL_VENDOR: Mesa/X.org
-GL_RENDERER: llvmpipe (LLVM 11.0.1, 256 bits)
-GL_VERSION: 3.1 Mesa 20.3.5
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker
 ```
 
-This is sufficient for the MuJoCo viewer because the reported OpenGL version is higher than `1.5`.
+Or use `sudo docker ...`.
 
-### Option B: WSLg
+### Missing Upstream Repositories
 
-Install an Ubuntu WSL distribution and use WSLg for Linux GUI support. This may be cleaner than Windows X-server forwarding, but WSL currently has no distribution installed on this machine.
+If the Docker build fails because files under `mujoco-worldgen` or `multi-agent-emergence-environments` are missing, clone the upstream repos:
 
-### Option C: Headless Data First
-
-The currently verified path is headless:
-
-1. Run random rollouts.
-2. Save `.npz` trajectory data.
-3. Build a separate visualization script that renders trajectories into plots or videos.
-
-This is the most reliable next step if GUI forwarding is unstable.
-
-## Known Technical Notes
-
-- The original project targets Python 3.6.
-- Native Windows Python 3.12 cannot install the original dependency stack.
-- `jsonnet==0.11.2` failed in Docker with a parser error; `jsonnet==0.17.0` works.
-- Random action samples must be converted from tuples to NumPy arrays before stepping the environment. The scripts already handle this.
-- Rewards are per-agent arrays. In the quadrant setup with 2 hiders and 2 seekers, rewards look like:
-
-```text
-[hider_0, hider_1, seeker_0, seeker_1]
+```bash
+git clone https://github.com/openai/mujoco-worldgen.git
+git clone https://github.com/openai/multi-agent-emergence-environments.git
 ```
 
-## Next Engineering Steps
+### OpenGL Version Too Low
 
-Recommended order:
+Run:
 
-1. Add a trajectory-to-video or trajectory-to-plot script.
-2. Install and validate saved-policy playback dependencies.
-3. Define a minimal training loop for 1 seeker vs 1 hider.
-4. Scale to 2 seekers vs 2 hiders.
-5. Start a separate modern Gymnasium/PyTorch cybersecurity transfer environment.
+```bash
+docker run --rm \
+  -e DISPLAY="$DISPLAY" \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v "$PWD:/workspace" \
+  mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/check_gl.py
+```
+
+If `GL_VERSION` is lower than `1.5`, use headless rollout collection instead of the live viewer, or run on a Linux machine with working OpenGL/X11 forwarding.
+
+### Slow Viewer
+
+The viewer can be slow if the container uses CPU software rendering. Headless rollout collection is the validated path for reliable data generation.
+
+## Notes On Dependency Choices
+
+The upstream repositories are old. The Docker image intentionally uses a legacy stack rather than modernizing the code:
+
+- Python 3.6 is required for compatibility.
+- Native Python 3.12 is not suitable.
+- `jsonnet==0.11.2` failed in this setup, so `jsonnet==0.17.0` is used.
+- `mujoco-py` requires the legacy MuJoCo 1.50 binaries and key file.
+
+The practical strategy is:
+
+1. Use this Docker image to reproduce and study the original environment.
+2. Collect rollouts and establish baseline behavior.
+3. Build future training and cybersecurity transfer work in a separate modern stack.
