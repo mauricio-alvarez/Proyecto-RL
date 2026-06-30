@@ -5,12 +5,8 @@ import time
 
 import numpy as np
 
+from ma_policy.load_policy import load_policy
 from mujoco_worldgen.util.envs import load_env
-
-
-def sample_action(env):
-    action = env.action_space.sample()
-    return {key: np.array(value) for key, value in action.items()}
 
 
 def serializable_info(info):
@@ -81,16 +77,41 @@ def summarize_obs(obs):
     }
 
 
+def summarize_policy_info(policy_info):
+    summary = {}
+    for key, value in policy_info.items():
+        if isinstance(value, dict):
+            summary[key] = {
+                sub_key: {
+                    "shape": list(sub_value.shape),
+                    "dtype": str(sub_value.dtype),
+                }
+                for sub_key, sub_value in value.items()
+                if isinstance(sub_value, np.ndarray)
+            }
+        elif isinstance(value, np.ndarray):
+            summary[key] = {
+                "shape": list(value.shape),
+                "dtype": str(value.dtype),
+                "mean": float(np.mean(value)),
+            }
+    return summary
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--env",
         default="/workspace/multi-agent-emergence-environments/examples/hide_and_seek_quadrant.jsonnet",
     )
-    parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument(
+        "--policy",
+        default="/workspace/multi-agent-emergence-environments/examples/hide_and_seek_quadrant.npz",
+    )
+    parser.add_argument("--episodes", type=int, default=3)
     parser.add_argument("--steps", type=int, default=120)
-    parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--out", default="/workspace/runs/random_rollouts_hide_seek_quadrant.npz")
+    parser.add_argument("--seed", type=int, default=11)
+    parser.add_argument("--out", default="/workspace/runs/policy_rollouts_hide_seek_quadrant.npz")
     args = parser.parse_args()
 
     np.random.seed(args.seed)
@@ -104,9 +125,13 @@ def main():
     )
     env.seed(args.seed)
 
+    policy = load_policy(args.policy, env=env, scope="policy_0")
+    policy.reset()
+
     first_obs = env.reset()
     manifest = {
         "env": args.env,
+        "policy": args.policy,
         "episodes_requested": args.episodes,
         "max_steps_per_episode": args.steps,
         "seed": args.seed,
@@ -115,7 +140,7 @@ def main():
         "observation_summary": summarize_obs(first_obs),
         "initial_layout": capture_layout(env),
         "created_unix": time.time(),
-        "collector": "collect_rollouts.py",
+        "collector": "collect_policy_rollouts.py",
     }
 
     episodes = []
@@ -125,10 +150,13 @@ def main():
     for episode_idx in range(args.episodes):
         env.seed(args.seed + episode_idx)
         obs = env.reset()
+        policy.reset()
+
         episode = {
             "layout": capture_layout(env),
             "observations": [],
             "actions": [],
+            "policy_infos": [],
             "rewards": [],
             "dones": [],
             "infos": [],
@@ -136,13 +164,15 @@ def main():
         total_reward = None
         done = False
         info = {}
+        policy_info = {}
 
         for step_idx in range(args.steps):
-            action = sample_action(env)
+            action, policy_info = policy.act(obs)
             next_obs, reward, done, info = env.step(action)
 
             episode["observations"].append(obs)
             episode["actions"].append(action)
+            episode["policy_infos"].append(summarize_policy_info(policy_info))
             episode["rewards"].append(np.array(reward))
             episode["dones"].append(bool(done))
             episode["infos"].append(serializable_info(info))
@@ -169,8 +199,8 @@ def main():
         episodes.append(episode)
 
         print(
-            "episode={episode} steps={steps} total_reward={total_reward} "
-            "done={done} discard={discard_episode}".format(**summary)
+            "episode={episode} seed={seed} steps={steps} "
+            "total_reward={total_reward} done={done} discard={discard_episode}".format(**summary)
         )
 
     np.savez_compressed(
@@ -184,6 +214,7 @@ def main():
     print("episodes_collected:", len(episodes))
     print("discard_count:", discard_count)
     print("first_observation_keys:", sorted(first_obs.keys()))
+    print("last_policy_info:", json.dumps(summarize_policy_info(policy_info), sort_keys=True)[:2000])
     print("manifest_json:", json.dumps(make_serializable(manifest), sort_keys=True)[:2000])
 
 

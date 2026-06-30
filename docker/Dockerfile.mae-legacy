@@ -34,5 +34,11 @@ COPY multi-agent-emergence-environments /workspace/multi-agent-emergence-environ
 
 RUN conda env create -f /workspace/environment.yml
 RUN conda run -n mae-legacy python -m pip install "pip<21" "setuptools<60" wheel
+RUN conda run -n mae-legacy python -m pip install \
+    tensorflow==1.13.1 \
+    cloudpickle==0.5.2 \
+    opencv-python==4.5.5.64 \
+    pytest==5.0.1 \
+    && conda run -n mae-legacy python -m pip install --no-deps baselines==0.1.5
 
 CMD ["conda", "run", "--no-capture-output", "-n", "mae-legacy", "python", "/workspace/multi-agent-emergence-environments/bin/examine.py", "/workspace/multi-agent-emergence-environments/examples/hide_and_seek_quadrant.jsonnet"]
