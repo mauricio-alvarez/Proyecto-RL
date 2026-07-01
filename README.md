@@ -7,6 +7,7 @@ The project now has two phases:
 - MAE baseline reproduction and policy analysis.
 - Principle-first cyber hide-and-seek RL environment and benchmark.
 - Real-data cyber benchmark using CISA Known Exploited Vulnerabilities records.
+- Local GPU-trained grid hide-and-seek models transferred into the KEV cyber benchmark.
 
 The validated baseline is:
 
@@ -28,25 +29,28 @@ Implemented:
 - Single-policy evaluator in `scripts/evaluate_policy.py`.
 - Cross-play hider/seeker evaluator in `scripts/evaluate_crossplay.py`.
 - Batch policy benchmark scripts in `scripts/benchmark_policies.py` and `scripts/benchmark_crossplay.py`.
+- PPO + GAE MAE self-play trainer in `scripts/train_mae_ppo.py`.
+- MAE PPO to KEV zero-shot transfer evaluator in `scripts/evaluate_mae_ppo_kev_transfer.py`.
 - Behavioral dataset collector in `scripts/collect_behavioral_dataset.py`.
 - Behavioral dataset inspector in `scripts/inspect_behavioral_dataset.py`.
 - Behavior-cloning baseline trainer in `scripts/train_behavior_clone.py`.
 - Structured behavior-cloning trainer in `scripts/train_structured_behavior_clone.py`.
 - DAgger dataset collector in `scripts/collect_dagger_dataset.py`.
 - Behavioral dataset merger in `scripts/merge_behavioral_datasets.py`.
-- Closed-loop cloned-vs-pretrained evaluator in `scripts/evaluate_clone_vs_pretrained.py`.
+- Closed-loop cloned-vs-pretrained evaluator in `scripts/evaluate_clone_vs_pretrained.py`, including separate hider and seeker clone checkpoints.
 - Principle-first cyber RL environment in `cyber_rl/`.
 - Cyber RL smoke test in `scripts/smoke_cyber_rl.py`.
 - Cyber RL benchmark runner in `scripts/run_cyber_benchmarks.py`.
 - CISA KEV downloader in `scripts/fetch_cisa_kev.py`.
 - CISA KEV real-data benchmark runner in `scripts/run_kev_benchmarks.py`.
+- Grid-to-KEV model transfer trainer in `scripts/train_grid_to_kev_transfer.py`.
 - OpenGL diagnostic script in `scripts/check_gl.py`.
 - Methodology and validation notes in `docs/`.
 - A sample random rollout artifact in `runs/random_rollouts_hide_seek_quadrant.npz`.
 
 Not implemented:
 
-- RL training loop.
+- Full OpenAI-scale distributed MAE training.
 - Real cyber-range integration.
 - Production-quality trajectory visualization.
 
@@ -59,7 +63,11 @@ Not implemented:
 |-- docs/
 |   |-- cyber_principle_first.md
 |   |-- environment_validation.md
+|   |-- grid_to_kev_model_transfer.md
 |   |-- kev_realworld_pipeline.md
+|   |-- mae_separated_models.md
+|   |-- mae_ppo_training.md
+|   |-- mae_ppo_to_kev_transfer.md
 |   |-- methodology.md
 |   `-- rollout_collection.md
 |-- cyber_rl/
@@ -91,6 +99,9 @@ Not implemented:
 |   |-- smoke_cyber_rl.py
 |   |-- smoke_mae.py
 |   |-- train_behavior_clone.py
+|   |-- train_grid_to_kev_transfer.py
+|   |-- train_mae_ppo.py
+|   |-- evaluate_mae_ppo_kev_transfer.py
 |   |-- train_structured_behavior_clone.py
 |   `-- verify_policy_deps.py
 |-- ASIS.md
@@ -221,6 +232,89 @@ runs/kev_realworld_benchmark_v1/kev_scenario_samples.json
 ```
 
 Full design and interpretation are in `docs/kev_realworld_pipeline.md`.
+
+## Train Game Models And Transfer To KEV
+
+This path trains two local game models first:
+
+- `grid_seeker.pt`
+- `grid_hider.pt`
+
+Then it transfers their encoder weights into cyber models:
+
+- `transfer_attacker.pt`
+- `transfer_defender.pt`
+
+This run uses GPU through the PyTorch CUDA image. The legacy MAE Docker image is not used for this training step because it is CPU-only and does not include PyTorch.
+
+Run:
+
+```bash
+docker run --rm --gpus all \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime \
+  python /workspace/scripts/train_grid_to_kev_transfer.py \
+    --kev-json /workspace/data/raw/known_exploited_vulnerabilities.json \
+    --out-dir /workspace/runs/grid_to_kev_transfer_v1 \
+    --grid-samples 80000 \
+    --cyber-samples 50000 \
+    --grid-epochs 25 \
+    --cyber-epochs 25 \
+    --episodes-per-family 35 \
+    --seed 3200 \
+    --n-nodes 8 \
+    --max-steps 24
+```
+
+Validated GPU:
+
+```text
+NVIDIA GeForce RTX 3060 Ti
+PyTorch 2.4.1+cu124
+CUDA available: True
+```
+
+Validated model results:
+
+```text
+grid_seeker validation accuracy: 0.998
+grid_hider validation accuracy: 0.989
+
+cyber attacker imitation:
+transfer: 0.7354
+scratch:  0.7409
+
+cyber defender imitation:
+transfer: 0.7569
+scratch:  0.7613
+
+closed-loop KEV attacker success:
+targeted:          0.161
+transfer_attacker: 0.103
+scratch_attacker:  0.101
+
+attacker success against defenders:
+adaptive:          0.095
+decoy_frontier:    0.097
+transfer_defender: 0.137
+scratch_defender:  0.158
+```
+
+Main outputs:
+
+```text
+runs/grid_to_kev_transfer_v1/grid_seeker.pt
+runs/grid_to_kev_transfer_v1/grid_hider.pt
+runs/grid_to_kev_transfer_v1/transfer_attacker.pt
+runs/grid_to_kev_transfer_v1/transfer_defender.pt
+runs/grid_to_kev_transfer_v1/scratch_attacker.pt
+runs/grid_to_kev_transfer_v1/scratch_defender.pt
+runs/grid_to_kev_transfer_v1/transfer_report.md
+runs/grid_to_kev_transfer_v1/transfer_summary.json
+```
+
+Full interpretation is in `docs/grid_to_kev_model_transfer.md`.
 
 ## Linux Prerequisites
 
@@ -668,6 +762,123 @@ Interpretation:
 - Seeker win rate close to `1.0` means the seeker controller reliably finds/catches the hiders in that matchup.
 - Hider win rate close to `1.0` means the hider controller reliably survives or avoids being caught.
 - Visible fraction is the fraction of rollout steps where at least one seeker can see at least one hider. It is not itself a win condition, but it helps diagnose whether a seeker is exploring/searching effectively.
+
+## Train Hider And Seeker With PPO + GAE
+
+This is now the main from-environment training path. It trains separate hider and seeker actor scopes with PPO clipping and GAE returns.
+
+Main script:
+
+```text
+scripts/train_mae_ppo.py
+```
+
+Target environments:
+
+```text
+multi-agent-emergence-environments/examples/hide_and_seek_quadrant.jsonnet
+multi-agent-emergence-environments/examples/hide_and_seek_full.jsonnet
+```
+
+Smoke-tested quadrant command:
+
+```bash
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/train_mae_ppo.py \
+    --env /workspace/multi-agent-emergence-environments/examples/hide_and_seek_quadrant.jsonnet \
+    --out-dir /workspace/runs/mae_ppo_quadrant_smoke \
+    --updates 1 \
+    --rollout-steps 8 \
+    --ppo-epochs 1 \
+    --batch-size 16 \
+    --hidden-sizes 64 \
+    --eval-every 1 \
+    --eval-episodes 1 \
+    --save-every 1 \
+    --seed 123
+```
+
+Smoke-tested full command:
+
+```bash
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/train_mae_ppo.py \
+    --env /workspace/multi-agent-emergence-environments/examples/hide_and_seek_full.jsonnet \
+    --out-dir /workspace/runs/mae_ppo_full_smoke \
+    --updates 1 \
+    --rollout-steps 8 \
+    --ppo-epochs 1 \
+    --batch-size 16 \
+    --hidden-sizes 64 \
+    --eval-every 1 \
+    --eval-episodes 1 \
+    --save-every 1 \
+    --seed 123
+```
+
+Validated outputs for both smoke runs:
+
+```text
+model.ckpt-1
+normalization.npz
+progress.csv
+summary.json
+report.txt
+hider_variables.txt
+seeker_variables.txt
+```
+
+The first real run should be quadrant, then full:
+
+```bash
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/train_mae_ppo.py \
+    --env /workspace/multi-agent-emergence-environments/examples/hide_and_seek_quadrant.jsonnet \
+    --out-dir /workspace/runs/mae_ppo_quadrant_v1 \
+    --updates 300 \
+    --rollout-steps 512 \
+    --ppo-epochs 4 \
+    --batch-size 512 \
+    --hidden-sizes 256,256 \
+    --learning-rate 0.0003 \
+    --gamma 0.998 \
+    --gae-lambda 0.95 \
+    --clip-range 0.2 \
+    --entropy-coef 0.01 \
+    --eval-every 25 \
+    --eval-episodes 5 \
+    --save-every 25 \
+    --seed 3001
+```
+
+Full-environment command:
+
+```bash
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/train_mae_ppo.py \
+    --env /workspace/multi-agent-emergence-environments/examples/hide_and_seek_full.jsonnet \
+    --out-dir /workspace/runs/mae_ppo_full_v1 \
+    --updates 500 \
+    --rollout-steps 512 \
+    --ppo-epochs 4 \
+    --batch-size 512 \
+    --hidden-sizes 256,256 \
+    --learning-rate 0.0003 \
+    --gamma 0.998 \
+    --gae-lambda 0.95 \
+    --clip-range 0.2 \
+    --entropy-coef 0.01 \
+    --eval-every 25 \
+    --eval-episodes 5 \
+    --save-every 25 \
+    --seed 4001
+```
+
+Full details are in `docs/mae_ppo_training.md`.
 
 ## Build A Behavioral Dataset
 
@@ -1206,6 +1417,81 @@ clone_vs_clone                 19    1    0    0.950    0.050    0.000    0.652 
 ```
 
 Conclusion: the extensive DAgger pipeline works, but more feed-forward supervised data is not enough. The hider clone remains the primary failure point and the current single-step model is likely missing temporal state. The next implementation should be a recurrent, role-specific clone trained on sequence chunks and evaluated with hidden state carried across rollout steps.
+
+## Run MAE With Separate Hider And Seeker Models
+
+The evaluator now supports independent role-specific clone checkpoints:
+
+```text
+--hider-clone-dir
+--seeker-clone-dir
+```
+
+This is the current MAE separated-model experiment. It trains one structured clone only on hider actions and one structured clone only on seeker actions from the extensive DAgger dataset.
+
+Train the hider clone:
+
+```bash
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/train_structured_behavior_clone.py \
+    --dataset /workspace/runs/behavioral_dagger_iter2_extensive_merged.npz \
+    --out-dir /workspace/runs/mae_separated_hider_structured_iter2 \
+    --role hider \
+    --epochs 45 \
+    --batch-size 2048 \
+    --hidden-sizes 256,256 \
+    --entity-hidden 64 \
+    --learning-rate 0.001 \
+    --seed 4100
+```
+
+Train the seeker clone:
+
+```bash
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/train_structured_behavior_clone.py \
+    --dataset /workspace/runs/behavioral_dagger_iter2_extensive_merged.npz \
+    --out-dir /workspace/runs/mae_separated_seeker_structured_iter2 \
+    --role seeker \
+    --epochs 45 \
+    --batch-size 2048 \
+    --hidden-sizes 256,256 \
+    --entity-hidden 64 \
+    --learning-rate 0.001 \
+    --seed 4200
+```
+
+Evaluate both separated models inside MAE:
+
+```bash
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/evaluate_clone_vs_pretrained.py \
+    --env /workspace/multi-agent-emergence-environments/examples/hide_and_seek_full.jsonnet \
+    --hider-policy /workspace/multi-agent-emergence-environments/examples/hide_and_seek_policy_phases/d_ramp_defense.npz \
+    --seeker-policy /workspace/multi-agent-emergence-environments/examples/hide_and_seek_policy_phases/c_ramps.npz \
+    --hider-clone-dir /workspace/runs/mae_separated_hider_structured_iter2 \
+    --seeker-clone-dir /workspace/runs/mae_separated_seeker_structured_iter2 \
+    --episodes 20 \
+    --steps 260 \
+    --seed 2001 \
+    --out /workspace/runs/mae_separated_clone_vs_pretrained_20/summary.json \
+    --report-out /workspace/runs/mae_separated_clone_vs_pretrained_20/report.txt
+```
+
+Validated closed-loop evidence:
+
+```text
+case                            S    H    T    S_win    H_win   T_rate  visible   S_return   H_return
+pretrained_vs_pretrained        1   19    0    0.050    0.950    0.000    0.317   -132.200    132.200
+clone_hider_vs_pretrained      18    2    0    0.900    0.100    0.000    0.747    115.200   -115.200
+pretrained_vs_clone_seeker      0   20    0    0.000    1.000    0.000    0.350   -164.300    138.200
+clone_vs_clone                 16    4    0    0.800    0.200    0.000    0.598     51.700    -51.700
+```
+
+The implementation works, but these role-specific clones are not yet expert-equivalent. The cloned hider remains weak against the pretrained seeker, and the cloned seeker fails against the pretrained hider. Full details are in `docs/mae_separated_models.md`.
 
 ## Inspect The Saved Dataset
 

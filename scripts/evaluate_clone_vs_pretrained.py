@@ -57,45 +57,50 @@ def checkpoint_prefix(clone_dir):
 
 
 class ClonedBCPolicy(object):
-    def __init__(self, clone_dir):
+    def __init__(self, clone_dir, graph=None, session=None):
         self.clone_dir = clone_dir
+        self.graph = graph or tf.get_default_graph()
+        self.session = session or tf.get_default_session()
+        if self.session is None:
+            raise ValueError("ClonedBCPolicy requires an active TensorFlow session")
+
         preprocessing_path = os.path.join(clone_dir, "preprocessing.npz")
         if not os.path.exists(preprocessing_path):
             raise ValueError("Missing preprocessing artifact: {}".format(preprocessing_path))
 
-        preprocessing = np.load(preprocessing_path, allow_pickle=True)
-        self.model_type = str(preprocessing["model_type"].item()) if "model_type" in preprocessing.files else "flat_bc_v1"
-        self.preprocessing = preprocessing
+        with self.graph.as_default():
+            preprocessing = np.load(preprocessing_path, allow_pickle=True)
+            self.model_type = str(preprocessing["model_type"].item()) if "model_type" in preprocessing.files else "flat_bc_v1"
+            self.preprocessing = preprocessing
 
-        ckpt = checkpoint_prefix(clone_dir)
-        meta_path = ckpt + ".meta"
-        if not os.path.exists(meta_path):
-            raise ValueError("Missing checkpoint meta graph: {}".format(meta_path))
+            ckpt = checkpoint_prefix(clone_dir)
+            meta_path = ckpt + ".meta"
+            if not os.path.exists(meta_path):
+                raise ValueError("Missing checkpoint meta graph: {}".format(meta_path))
 
-        self.saver = tf.train.import_meta_graph(meta_path, clear_devices=True)
-        self.saver.restore(tf.get_default_session(), ckpt)
-        graph = tf.get_default_graph()
-        self.pred_tensors = {
-            "movement_0": graph.get_tensor_by_name("pred_movement_0:0"),
-            "movement_1": graph.get_tensor_by_name("pred_movement_1:0"),
-            "movement_2": graph.get_tensor_by_name("pred_movement_2:0"),
-            "pull": graph.get_tensor_by_name("pred_pull:0"),
-            "glueall": graph.get_tensor_by_name("pred_glueall:0"),
-        }
-        if self.model_type == "structured_bc_v1":
-            self.obs_keys = [str(value) for value in preprocessing["obs_keys"].tolist()]
-            self.float_obs_keys = [str(value) for value in preprocessing["float_obs_keys"].tolist()]
-            self.input_tensors = {
-                key: graph.get_tensor_by_name("input_{}:0".format(key))
-                for key in self.obs_keys
+            self.saver = tf.train.import_meta_graph(meta_path, clear_devices=True)
+            self.saver.restore(self.session, ckpt)
+            self.pred_tensors = {
+                "movement_0": self.graph.get_tensor_by_name("pred_movement_0:0"),
+                "movement_1": self.graph.get_tensor_by_name("pred_movement_1:0"),
+                "movement_2": self.graph.get_tensor_by_name("pred_movement_2:0"),
+                "pull": self.graph.get_tensor_by_name("pred_pull:0"),
+                "glueall": self.graph.get_tensor_by_name("pred_glueall:0"),
             }
-            self.role_ph = graph.get_tensor_by_name("role:0")
-        else:
-            self.feature_mean = preprocessing["feature_mean"].astype(np.float32)
-            self.feature_std = preprocessing["feature_std"].astype(np.float32)
-            self.obs_keys = [str(value) for value in preprocessing["obs_keys"].tolist()]
-            self.include_role = bool(preprocessing["include_role"].item())
-            self.features_ph = graph.get_tensor_by_name("features:0")
+            if self.model_type == "structured_bc_v1":
+                self.obs_keys = [str(value) for value in preprocessing["obs_keys"].tolist()]
+                self.float_obs_keys = [str(value) for value in preprocessing["float_obs_keys"].tolist()]
+                self.input_tensors = {
+                    key: self.graph.get_tensor_by_name("input_{}:0".format(key))
+                    for key in self.obs_keys
+                }
+                self.role_ph = self.graph.get_tensor_by_name("role:0")
+            else:
+                self.feature_mean = preprocessing["feature_mean"].astype(np.float32)
+                self.feature_std = preprocessing["feature_std"].astype(np.float32)
+                self.obs_keys = [str(value) for value in preprocessing["obs_keys"].tolist()]
+                self.include_role = bool(preprocessing["include_role"].item())
+                self.features_ph = self.graph.get_tensor_by_name("features:0")
 
     def reset(self):
         return None
@@ -141,7 +146,7 @@ class ClonedBCPolicy(object):
         else:
             features = self._flat_features(observation, role_id)
             feed = {self.features_ph: features}
-        outputs = tf.get_default_session().run(self.pred_tensors, feed_dict=feed)
+        outputs = self.session.run(self.pred_tensors, feed_dict=feed)
         movement = np.stack([
             outputs["movement_0"],
             outputs["movement_1"],
@@ -246,6 +251,8 @@ def write_report(path, summary):
     lines.append("episodes_per_case: {}".format(summary["episodes_per_case"]))
     lines.append("steps: {}".format(summary["steps"]))
     lines.append("seed_start: {}".format(summary["seed"]))
+    lines.append("hider_clone_dir: {}".format(summary["hider_clone_dir"]))
+    lines.append("seeker_clone_dir: {}".format(summary["seeker_clone_dir"]))
     lines.append("")
     lines.append("{:<28} {:>4} {:>4} {:>4} {:>8} {:>8} {:>8} {:>8} {:>10} {:>10}".format(
         "case", "S", "H", "T", "S_win", "H_win", "T_rate", "visible", "S_return", "H_return"
@@ -285,6 +292,8 @@ def main():
         default="/workspace/multi-agent-emergence-environments/examples/hide_and_seek_policy_phases/c_ramps.npz",
     )
     parser.add_argument("--clone-dir", default="/workspace/runs/bc_baseline_d_ramp_vs_c_ramps_det_20ep")
+    parser.add_argument("--hider-clone-dir", default=None)
+    parser.add_argument("--seeker-clone-dir", default=None)
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--steps", type=int, default=260)
     parser.add_argument("--seed", type=int, default=2001)
@@ -323,9 +332,22 @@ def main():
         scope="pretrained_seeker",
         stochastic=args.pretrained_stochastic,
     )
-    clone_policy = ClonedBCPolicy(args.clone_dir)
-    cloned_hider = CloneRoleController(clone_policy, ROLE_HIDER)
-    cloned_seeker = CloneRoleController(clone_policy, ROLE_SEEKER)
+    hider_clone_dir = args.hider_clone_dir or args.clone_dir
+    seeker_clone_dir = args.seeker_clone_dir or args.clone_dir
+
+    if hider_clone_dir == seeker_clone_dir:
+        clone_policy = ClonedBCPolicy(hider_clone_dir)
+        cloned_hider = CloneRoleController(clone_policy, ROLE_HIDER)
+        cloned_seeker = CloneRoleController(clone_policy, ROLE_SEEKER)
+    else:
+        hider_graph = tf.Graph()
+        hider_sess = tf.Session(graph=hider_graph, config=tf_config)
+        seeker_graph = tf.Graph()
+        seeker_sess = tf.Session(graph=seeker_graph, config=tf_config)
+        hider_clone_policy = ClonedBCPolicy(hider_clone_dir, graph=hider_graph, session=hider_sess)
+        seeker_clone_policy = ClonedBCPolicy(seeker_clone_dir, graph=seeker_graph, session=seeker_sess)
+        cloned_hider = CloneRoleController(hider_clone_policy, ROLE_HIDER)
+        cloned_seeker = CloneRoleController(seeker_clone_policy, ROLE_SEEKER)
 
     case_specs = [
         ("pretrained_vs_pretrained", pretrained_hider, pretrained_seeker),
@@ -370,7 +392,10 @@ def main():
         "env": args.env,
         "hider_policy": args.hider_policy,
         "seeker_policy": args.seeker_policy,
-        "clone_dir": args.clone_dir,
+        "clone_dir": args.clone_dir if hider_clone_dir == seeker_clone_dir else None,
+        "fallback_clone_dir": args.clone_dir,
+        "hider_clone_dir": hider_clone_dir,
+        "seeker_clone_dir": seeker_clone_dir,
         "pretrained_stochastic": args.pretrained_stochastic,
         "episodes_per_case": args.episodes,
         "steps": args.steps,
