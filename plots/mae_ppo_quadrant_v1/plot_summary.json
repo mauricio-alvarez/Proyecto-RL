@@ -1,0 +1,51 @@
+{
+  "episodes_completed": 1920,
+  "first": {
+    "advantage_mean": 0.002454,
+    "advantage_std": 8.247118,
+    "approx_kl": 0.100567,
+    "clip_fraction": 0.575684,
+    "entropy": 7.983698,
+    "episodes_completed": 6.0,
+    "grad_norm": 1.913933,
+    "loss": 16.344418,
+    "policy_loss": -0.033213,
+    "recent_hider_wins": 1.0,
+    "recent_mean_episode_length": 80.0,
+    "recent_mean_hider_return": -21.0,
+    "recent_mean_seeker_return": 21.0,
+    "recent_seeker_wins": 5.0,
+    "recent_ties": 0.0,
+    "samples": 2048.0,
+    "update": 1.0,
+    "value_loss": 32.914936
+  },
+  "last": {
+    "advantage_mean": -0.059279,
+    "advantage_std": 7.273686,
+    "approx_kl": 0.011025,
+    "clip_fraction": 0.141602,
+    "entropy": 5.289762,
+    "episodes_completed": 1920.0,
+    "grad_norm": 4.302416,
+    "loss": 12.662609,
+    "policy_loss": -0.033393,
+    "recent_hider_wins": 10.0,
+    "recent_mean_episode_length": 80.0,
+    "recent_mean_hider_return": 1.0,
+    "recent_mean_seeker_return": -1.0,
+    "recent_seeker_wins": 10.0,
+    "recent_ties": 0.0,
+    "samples": 2048.0,
+    "update": 300.0,
+    "value_loss": 25.497801
+  },
+  "plots": [
+    "/workspace/plots/mae_ppo_quadrant_v1/ppo_returns.svg",
+    "/workspace/plots/mae_ppo_quadrant_v1/ppo_recent_wins.svg",
+    "/workspace/plots/mae_ppo_quadrant_v1/ppo_optimization.svg",
+    "/workspace/plots/mae_ppo_quadrant_v1/ppo_entropy.svg",
+    "/workspace/plots/mae_ppo_quadrant_v1/ppo_value_loss.svg"
+  ],
+  "updates": 300
+}
