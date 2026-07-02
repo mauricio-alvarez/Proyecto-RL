@@ -30,7 +30,11 @@ Implemented:
 - Cross-play hider/seeker evaluator in `scripts/evaluate_crossplay.py`.
 - Batch policy benchmark scripts in `scripts/benchmark_policies.py` and `scripts/benchmark_crossplay.py`.
 - PPO + GAE MAE self-play trainer in `scripts/train_mae_ppo.py`.
+- MAE PPO checkpoint evaluator in `scripts/evaluate_mae_ppo.py`.
+- MAE PPO progress plotter in `scripts/plot_mae_ppo_progress.py`.
 - MAE PPO to KEV zero-shot transfer evaluator in `scripts/evaluate_mae_ppo_kev_transfer.py`.
+- MAE PPO checkpoint-500 to KEV fine-tuning script in `scripts/finetune_mae_ppo_kev.py`.
+- Single-role MAE source-environment transfer experiments in `docs/mae_other_envs_kev_transfer.md`.
 - Behavioral dataset collector in `scripts/collect_behavioral_dataset.py`.
 - Behavioral dataset inspector in `scripts/inspect_behavioral_dataset.py`.
 - Behavior-cloning baseline trainer in `scripts/train_behavior_clone.py`.
@@ -879,6 +883,82 @@ docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
 ```
 
 Full details are in `docs/mae_ppo_training.md`.
+
+Current validated full-environment PPO checkpoints:
+
+```text
+runs/mae_ppo_full_v1/model.ckpt-500
+runs/mae_ppo_full_v2_continue/model.ckpt-1000
+```
+
+The checkpoint-1000 continuation reached this 100-episode MAE evaluation:
+
+```text
+hider_win_rate: 0.5600
+seeker_win_rate: 0.4300
+tie_rate: 0.0100
+```
+
+The best zero-shot KEV transfer result is still the checkpoint-500 full-environment model:
+
+```text
+checkpoint-500 KEV transfer success: 0.190
+checkpoint-1000 KEV transfer success: 0.143
+linear_q_kev success:                0.080 to 0.095 depending on run seed
+```
+
+This means additional MAE training improved source-domain hide-and-seek balance, but did not automatically improve target-domain cybersecurity transfer.
+
+KEV fine-tuning from checkpoint 500 is implemented in `scripts/finetune_mae_ppo_kev.py` and documented in `docs/kev_finetuning.md`. The current useful fine-tuned model is the MAE-feature Q attacker:
+
+```text
+mae_ppo_kev_q_finetuned_attacker success: 0.133
+mae_ppo_kev_q_finetuned_attacker caught:  0.053
+linear_q_kev success:                     0.069
+q_table_kev success:                      0.001
+```
+
+The zero-shot MAE transfer attacker still has higher raw success, but much higher detection:
+
+```text
+mae_ppo_transfer_attacker success: 0.197
+mae_ppo_transfer_attacker caught:  0.747
+```
+
+The next technical step is to optimize a hybrid success/stealth policy, using the zero-shot MAE attacker when detection is low and the fine-tuned Q attacker when detection risk is high.
+
+Success-first targeted distillation is now implemented as `mae_ppo_targeted_q_finetuned_attacker`. On the same KEV evaluation seeds it catches up to the handcrafted `targeted` baseline:
+
+```text
+mae_ppo_targeted_q_finetuned_attacker success: 0.276
+mae_ppo_targeted_q_finetuned_attacker caught:  0.724
+targeted success:                             0.273
+targeted caught:                              0.727
+```
+
+A full 500-episode shaped Q update reduced caught rate but damaged success:
+
+```text
+mae_ppo_targeted_q_finetuned_attacker after 500 Q episodes:
+success 0.061
+caught  0.200
+timeout 0.739
+```
+
+So the next technical step is validation-based early stopping for the success-first Q update. The targeted behavior transfers, but long fine-tuning still drifts toward timeout-heavy policies.
+
+Additional MAE source environments were also trained as seeker-role policies and tested in KEV:
+
+```text
+hide_and_seek_full_500 success: 0.206
+sequential_lock success:       0.186
+blueprint success:             0.176
+lock_and_return success:       0.160
+hide_and_seek_quadrant:        0.148
+shelter success:               0.124
+```
+
+Full details are in `docs/mae_other_envs_kev_transfer.md`. The result supports keeping `hide_and_seek_full` as the main source model, with `sequential_lock` and `blueprint` as possible auxiliary sources.
 
 ## Build A Behavioral Dataset
 

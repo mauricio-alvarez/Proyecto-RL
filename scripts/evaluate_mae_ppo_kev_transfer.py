@@ -467,6 +467,11 @@ def main():
     parser.add_argument("--n-nodes", type=int, default=8)
     parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--families", default=",".join(kev_families()))
+    parser.add_argument(
+        "--exclude-mae-defender",
+        action="store_true",
+        help="Evaluate the transferred MAE attacker only against default cyber defenders. Useful for single-role checkpoints.",
+    )
     args = parser.parse_args()
 
     catalog = load_kev_catalog(args.kev_json)
@@ -484,7 +489,9 @@ def main():
         load_linear_q(args.linear_q_json, seed=args.seed + 2),
         mae_attacker,
     ]
-    defenders = default_defenders() + [mae_defender]
+    defenders = default_defenders()
+    if not args.exclude_mae_defender:
+        defenders = defenders + [mae_defender]
 
     suite = run_suite(
         catalog=catalog,
@@ -503,6 +510,7 @@ def main():
         "train_summary": args.train_summary,
         "q_table_json": args.q_table_json,
         "linear_q_json": args.linear_q_json,
+        "exclude_mae_defender": args.exclude_mae_defender,
     }
 
     if not os.path.exists(args.out_dir):

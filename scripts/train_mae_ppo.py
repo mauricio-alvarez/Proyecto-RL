@@ -88,6 +88,13 @@ def roles_for_env(n_agents, n_hiders):
     return roles
 
 
+def safe_role_mean(values):
+    values = np.asarray(values, dtype=np.float32)
+    if values.size == 0:
+        return 0.0
+    return float(np.mean(values))
+
+
 def actions_to_dict(actions):
     movement = np.stack(
         [actions["movement_0"], actions["movement_1"], actions["movement_2"]],
@@ -296,8 +303,12 @@ def minibatches(n_samples, batch_size, rng):
 
 def summarize_winner(total_reward, n_hiders):
     total_reward = np.asarray(total_reward, dtype=np.float32)
-    hider_mean = float(np.mean(total_reward[:n_hiders]))
-    seeker_mean = float(np.mean(total_reward[n_hiders:]))
+    if n_hiders <= 0:
+        return "seekers"
+    if n_hiders >= len(total_reward):
+        return "hiders"
+    hider_mean = safe_role_mean(total_reward[:n_hiders])
+    seeker_mean = safe_role_mean(total_reward[n_hiders:])
     if seeker_mean > hider_mean:
         return "seekers"
     if hider_mean > seeker_mean:
@@ -331,6 +342,7 @@ def evaluate_policy(sess, env, model, actor_rms, critic_rms, obs_keys, roles, n_
                 deterministic=True,
             )
             obs, reward, done, info = env.step(actions_to_dict(actions))
+            reward = np.asarray(reward, dtype=np.float32).reshape(-1)[:len(roles)]
             total_reward = reward if total_reward is None else total_reward + reward
             if done or info.get("discard_episode"):
                 break
@@ -343,8 +355,8 @@ def evaluate_policy(sess, env, model, actor_rms, critic_rms, obs_keys, roles, n_
             "done": bool(done),
             "discard_episode": bool(info.get("discard_episode")),
             "total_reward": total_reward.round(4).tolist(),
-            "hider_mean_return": round(float(np.mean(total_reward[:n_hiders])), 4),
-            "seeker_mean_return": round(float(np.mean(total_reward[n_hiders:])), 4),
+            "hider_mean_return": round(safe_role_mean(total_reward[:n_hiders]), 4),
+            "seeker_mean_return": round(safe_role_mean(total_reward[n_hiders:]), 4),
             "winner": summarize_winner(total_reward, n_hiders),
             "visible_fraction": round(float(visible_steps) / float(max(steps, 1)), 4),
         })
@@ -356,6 +368,8 @@ def write_report(path, summary):
         "MAE PPO-GAE Training Report",
         "env: {}".format(summary["env"]),
         "updates: {}".format(summary["updates_completed"]),
+        "updates_this_run: {}".format(summary["updates_this_run"]),
+        "initial_update: {}".format(summary["initial_update"]),
         "rollout_steps: {}".format(summary["rollout_steps"]),
         "checkpoint: {}".format(summary["checkpoint_path"]),
         "hider_variables: {}".format(summary["hider_variables_path"]),
@@ -414,6 +428,15 @@ def main():
     parser.add_argument("--eval-every", type=int, default=25)
     parser.add_argument("--eval-episodes", type=int, default=5)
     parser.add_argument("--save-every", type=int, default=25)
+    parser.add_argument("--restore-checkpoint", default="")
+    parser.add_argument("--restore-normalization", default="")
+    parser.add_argument("--initial-update", type=int, default=0)
+    parser.add_argument(
+        "--n-hiders-override",
+        type=int,
+        default=-1,
+        help="Override role split. Use 0 to train all agents with the seeker scope, or n_agents to train all as hiders.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -434,12 +457,30 @@ def main():
     critic_example = critic_features(actor_example)
     n_agents = actor_example.shape[0]
     n_hiders = int(env.metadata.get("n_hiders", 0))
-    if n_hiders <= 0:
-        raise ValueError("Could not determine n_hiders from environment metadata")
+    if args.n_hiders_override >= 0:
+        n_hiders = int(args.n_hiders_override)
+    if n_hiders < 0 or n_hiders > n_agents:
+        raise ValueError("Invalid n_hiders {} for n_agents {}".format(n_hiders, n_agents))
+    if n_hiders <= 0 and args.n_hiders_override < 0:
+        raise ValueError("Could not determine n_hiders from environment metadata; pass --n-hiders-override")
     roles = roles_for_env(n_agents, n_hiders)
     hidden_sizes = parse_hidden_sizes(args.hidden_sizes)
     actor_rms = RunningMeanStd(shape=(actor_example.shape[1],))
     critic_rms = RunningMeanStd(shape=(critic_example.shape[1],))
+    if args.restore_normalization:
+        normalization = np.load(args.restore_normalization, allow_pickle=True)
+        actor_mean = normalization["actor_mean"].astype(np.float64)
+        critic_mean = normalization["critic_mean"].astype(np.float64)
+        if actor_mean.shape != actor_rms.mean.shape:
+            raise ValueError("Actor normalization shape mismatch: {} vs {}".format(actor_mean.shape, actor_rms.mean.shape))
+        if critic_mean.shape != critic_rms.mean.shape:
+            raise ValueError("Critic normalization shape mismatch: {} vs {}".format(critic_mean.shape, critic_rms.mean.shape))
+        actor_rms.mean = actor_mean
+        actor_rms.var = normalization["actor_var"].astype(np.float64)
+        actor_rms.count = float(normalization["actor_count"])
+        critic_rms.mean = critic_mean
+        critic_rms.var = normalization["critic_var"].astype(np.float64)
+        critic_rms.count = float(normalization["critic_count"])
 
     model = build_model(
         actor_dim=actor_example.shape[1],
@@ -478,7 +519,11 @@ def main():
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-        for update in range(1, args.updates + 1):
+        if args.restore_checkpoint:
+            saver.restore(sess, args.restore_checkpoint)
+            print("restored_checkpoint:", args.restore_checkpoint, flush=True)
+        for local_update in range(1, args.updates + 1):
+            update = args.initial_update + local_update
             actor_buf = []
             critic_buf = []
             role_buf = []
@@ -505,7 +550,7 @@ def main():
                     deterministic=False,
                 )
                 next_obs, reward, done, info = env.step(actions_to_dict(actions))
-                reward = np.asarray(reward, dtype=np.float32)
+                reward = np.asarray(reward, dtype=np.float32).reshape(-1)[:n_agents]
                 done_flag = bool(done or info.get("discard_episode"))
 
                 actor_buf.append(actor_batch)
@@ -621,8 +666,8 @@ def main():
                 "recent_hider_wins": int(recent_winners.count("hiders")),
                 "recent_seeker_wins": int(recent_winners.count("seekers")),
                 "recent_ties": int(recent_winners.count("tie")),
-                "recent_mean_hider_return": round(float(np.mean(mean_team_returns[:n_hiders])), 4),
-                "recent_mean_seeker_return": round(float(np.mean(mean_team_returns[n_hiders:])), 4),
+                "recent_mean_hider_return": round(safe_role_mean(mean_team_returns[:n_hiders]), 4),
+                "recent_mean_seeker_return": round(safe_role_mean(mean_team_returns[n_hiders:]), 4),
                 "recent_mean_episode_length": round(float(np.mean(episode_lengths[-20:])), 4) if episode_lengths else 0.0,
                 "advantage_mean": round(float(adv_mean), 6),
                 "advantage_std": round(float(adv_std), 6),
@@ -639,7 +684,7 @@ def main():
                 , flush=True
             )
 
-            if update % args.eval_every == 0 or update == args.updates:
+            if local_update % args.eval_every == 0 or local_update == args.updates:
                 evaluation = evaluate_policy(
                     sess=sess,
                     env=env,
@@ -666,11 +711,11 @@ def main():
                 )
                 obs = env.reset()
 
-            if update % args.save_every == 0 or update == args.updates:
+            if local_update % args.save_every == 0 or local_update == args.updates:
                 checkpoint_path = saver.save(sess, os.path.join(args.out_dir, "model.ckpt"), global_step=update)
 
         if not checkpoint_path:
-            checkpoint_path = saver.save(sess, os.path.join(args.out_dir, "model.ckpt"), global_step=args.updates)
+            checkpoint_path = saver.save(sess, os.path.join(args.out_dir, "model.ckpt"), global_step=args.initial_update + args.updates)
 
     if progress_rows:
         fieldnames = sorted(progress_rows[0].keys())
@@ -721,9 +766,14 @@ def main():
         "value_coef": args.value_coef,
         "entropy_coef": args.entropy_coef,
         "seed": args.seed,
+        "restore_checkpoint": args.restore_checkpoint,
+        "restore_normalization": args.restore_normalization,
+        "initial_update": args.initial_update,
         "last_progress": last_progress,
         "evaluation": evaluation,
     }
+    summary["updates_this_run"] = args.updates
+    summary["updates_completed"] = args.initial_update + args.updates
     summary_path = os.path.join(args.out_dir, "summary.json")
     with open(summary_path, "w") as summary_file:
         json.dump(make_serializable(summary), summary_file, indent=2, sort_keys=True)

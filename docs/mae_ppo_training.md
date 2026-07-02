@@ -167,6 +167,120 @@ docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
     --seed 4001
 ```
 
+## Validated Full-Environment Runs
+
+The first full-environment run produced:
+
+```text
+run_dir: runs/mae_ppo_full_v1
+env: multi-agent-emergence-environments/examples/hide_and_seek_full.jsonnet
+updates: 500
+episodes_completed: 1066
+checkpoint: runs/mae_ppo_full_v1/model.ckpt-500
+```
+
+Final 100-episode checkpoint evaluation:
+
+```text
+hider_wins: 40
+seeker_wins: 58
+ties: 2
+hider_win_rate: 0.4000
+seeker_win_rate: 0.5800
+mean_visible_fraction: 0.5528
+```
+
+The checkpoint was then continued for 500 additional PPO updates with a lower learning rate:
+
+```bash
+docker run --rm -e PYTHONUNBUFFERED=1 -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/train_mae_ppo.py \
+    --env /workspace/multi-agent-emergence-environments/examples/hide_and_seek_full.jsonnet \
+    --out-dir /workspace/runs/mae_ppo_full_v2_continue \
+    --updates 500 \
+    --rollout-steps 512 \
+    --ppo-epochs 4 \
+    --batch-size 512 \
+    --hidden-sizes 256,256 \
+    --learning-rate 0.0001 \
+    --gamma 0.998 \
+    --gae-lambda 0.95 \
+    --clip-range 0.2 \
+    --entropy-coef 0.01 \
+    --eval-every 25 \
+    --eval-episodes 5 \
+    --save-every 25 \
+    --seed 4101 \
+    --restore-checkpoint /workspace/runs/mae_ppo_full_v1/model.ckpt-500 \
+    --restore-normalization /workspace/runs/mae_ppo_full_v1/normalization.npz \
+    --initial-update 500
+```
+
+Validated continuation output:
+
+```text
+run_dir: runs/mae_ppo_full_v2_continue
+updates: 1000
+updates_this_run: 500
+initial_update: 500
+checkpoint: runs/mae_ppo_full_v2_continue/model.ckpt-1000
+recent_hider_wins: 11
+recent_seeker_wins: 9
+recent_mean_hider_return: -76.775
+recent_mean_seeker_return: -81.000
+```
+
+Final 100-episode checkpoint evaluation:
+
+```bash
+docker run --rm -e PYTHONUNBUFFERED=1 -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/evaluate_mae_ppo.py \
+    --env /workspace/multi-agent-emergence-environments/examples/hide_and_seek_full.jsonnet \
+    --checkpoint /workspace/runs/mae_ppo_full_v2_continue/model.ckpt-1000 \
+    --normalization /workspace/runs/mae_ppo_full_v2_continue/normalization.npz \
+    --train-summary /workspace/runs/mae_ppo_full_v2_continue/summary.json \
+    --episodes 100 \
+    --seed 260001 \
+    --out /workspace/runs/mae_ppo_full_v2_continue/eval_100_summary.json \
+    --report-out /workspace/runs/mae_ppo_full_v2_continue/eval_100_report.txt
+```
+
+Result:
+
+```text
+hider_wins: 56
+seeker_wins: 43
+ties: 1
+hider_win_rate: 0.5600
+seeker_win_rate: 0.4300
+mean_visible_fraction: 0.5460
+```
+
+The continuation improved the game-task balance from seeker-favored at checkpoint 500 to hider-favored at checkpoint 1000. It also made recent training returns much less negative, which indicates more stable policy behavior. This does not automatically mean better cybersecurity transfer; the KEV transfer result is tracked separately in `docs/mae_ppo_to_kev_transfer.md`.
+
+Generate plots for the continuation run:
+
+```bash
+docker run --rm -v "$PWD:/workspace" mae-legacy:dev \
+  conda run --no-capture-output -n mae-legacy \
+  python /workspace/scripts/plot_mae_ppo_progress.py \
+    --progress /workspace/runs/mae_ppo_full_v2_continue/progress.csv \
+    --out-dir /workspace/plots/mae_ppo_full_v2_continue \
+    --report-out /workspace/plots/mae_ppo_full_v2_continue/plot_summary.json
+```
+
+Generated plots:
+
+```text
+plots/mae_ppo_full_v2_continue/ppo_returns.svg
+plots/mae_ppo_full_v2_continue/ppo_recent_wins.svg
+plots/mae_ppo_full_v2_continue/ppo_optimization.svg
+plots/mae_ppo_full_v2_continue/ppo_entropy.svg
+plots/mae_ppo_full_v2_continue/ppo_value_loss.svg
+```
+
 ## Artifacts
 
 Each run writes:
